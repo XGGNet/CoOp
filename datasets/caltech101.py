@@ -7,6 +7,8 @@ from dassl.utils import mkdir_if_missing
 from .oxford_pets import OxfordPets
 from .dtd import DescribableTextures as DTD
 
+from pdb import set_trace as st
+
 IGNORED = ["BACKGROUND_Google", "Faces_easy"]
 NEW_CNAMES = {
     "airplanes": "airplane",
@@ -34,6 +36,8 @@ class Caltech101(DatasetBase):
         else:
             train, val, test = DTD.read_and_split_data(self.image_dir, ignored=IGNORED, new_cnames=NEW_CNAMES)
             OxfordPets.save_split(train, val, test, self.split_path, self.image_dir)
+        
+    
 
         num_shots = cfg.DATASET.NUM_SHOTS
         if num_shots >= 1:

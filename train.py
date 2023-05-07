@@ -23,9 +23,16 @@ import datasets.imagenetv2
 import datasets.imagenet_a
 import datasets.imagenet_r
 
+import datasets.cub
+
 import trainers.coop
 import trainers.cocoop
 import trainers.zsclip
+
+import trainers.clip_adapter
+
+
+from pdb import set_trace as st
 
 
 def print_args(args, cfg):
@@ -45,6 +52,7 @@ def print_args(args, cfg):
 def reset_cfg(cfg, args):
     if args.root:
         cfg.DATASET.ROOT = args.root
+
 
     if args.output_dir:
         cfg.OUTPUT_DIR = args.output_dir
@@ -127,6 +135,7 @@ def setup_cfg(args):
 
 def main(args):
     cfg = setup_cfg(args)
+    
     if cfg.SEED >= 0:
         print("Setting fixed seed: {}".format(cfg.SEED))
         set_random_seed(cfg.SEED)

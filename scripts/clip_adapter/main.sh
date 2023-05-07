@@ -2,7 +2,7 @@
 
 # custom config
 DATA=/mnt/Xsky/zyl/code/SAM_SEG/mis/data/
-TRAINER=CoOp
+TRAINER=CLIP_Adapter
 
 DATASET=$1
 CFG=$2  # config file

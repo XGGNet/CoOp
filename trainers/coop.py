@@ -13,6 +13,8 @@ from dassl.optim import build_optimizer, build_lr_scheduler
 from clip import clip
 from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
 
+from pdb import set_trace as st
+
 _tokenizer = _Tokenizer()
 
 
@@ -61,12 +63,19 @@ class PromptLearner(nn.Module):
     def __init__(self, cfg, classnames, clip_model):
         super().__init__()
         n_cls = len(classnames)
+
         n_ctx = cfg.TRAINER.COOP.N_CTX
-        ctx_init = cfg.TRAINER.COOP.CTX_INIT
+
+        ctx_init = cfg.TRAINER.COOP.CTX_INIT # ''
+
         dtype = clip_model.dtype
-        ctx_dim = clip_model.ln_final.weight.shape[0]
-        clip_imsize = clip_model.visual.input_resolution
-        cfg_imsize = cfg.INPUT.SIZE[0]
+
+        ctx_dim = clip_model.ln_final.weight.shape[0] #512
+
+        clip_imsize = clip_model.visual.input_resolution #224
+
+        cfg_imsize = cfg.INPUT.SIZE[0] #224
+
         assert cfg_imsize == clip_imsize, f"cfg_imsize ({cfg_imsize}) must equal to clip_imsize ({clip_imsize})"
 
         if ctx_init:
@@ -74,8 +83,10 @@ class PromptLearner(nn.Module):
             ctx_init = ctx_init.replace("_", " ")
             n_ctx = len(ctx_init.split(" "))
             prompt = clip.tokenize(ctx_init)
+
             with torch.no_grad():
                 embedding = clip_model.token_embedding(prompt).type(dtype)
+
             ctx_vectors = embedding[0, 1 : 1 + n_ctx, :]
             prompt_prefix = ctx_init
 
@@ -83,32 +94,45 @@ class PromptLearner(nn.Module):
             # random initialization
             if cfg.TRAINER.COOP.CSC:
                 print("Initializing class-specific contexts")
-                ctx_vectors = torch.empty(n_cls, n_ctx, ctx_dim, dtype=dtype)
+                ctx_vectors = torch.empty(n_cls, n_ctx, ctx_dim, dtype=dtype) #n_cls,16,512
             else:
+                # here
                 print("Initializing a generic context")
-                ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype)
+                ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype)  #16,512
             nn.init.normal_(ctx_vectors, std=0.02)
-            prompt_prefix = " ".join(["X"] * n_ctx)
+            prompt_prefix = " ".join(["X"] * n_ctx) #16
 
         print(f'Initial context: "{prompt_prefix}"')
         print(f"Number of context words (tokens): {n_ctx}")
 
-        self.ctx = nn.Parameter(ctx_vectors)  # to be optimized
+        self.ctx = nn.Parameter(ctx_vectors)  # to be optimized  #(16,512)
+
 
         classnames = [name.replace("_", " ") for name in classnames]
         name_lens = [len(_tokenizer.encode(name)) for name in classnames]
-        prompts = [prompt_prefix + " " + name + "." for name in classnames]
+        prompts = [prompt_prefix + " " + name + "." for name in classnames] # len=n_cls
 
-        tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts])
+
+        '''
+        prompts
+        ['X X X X X X X X X X X X X X X X class_name.'] *n_cls
+        '''
+
+        tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts]) #n_cls,77
+
         with torch.no_grad():
-            embedding = clip_model.token_embedding(tokenized_prompts).type(dtype)
+            embedding = clip_model.token_embedding(tokenized_prompts).type(dtype) #n_cls,77,512
+
+        # SOS, learnable tokens, CLS, EOS, PAD...
+
+
 
         # These token vectors will be saved when in save_model(),
         # but they should be ignored in load_model() as we want to use
         # those computed using the current class names
-        self.register_buffer("token_prefix", embedding[:, :1, :])  # SOS
-        self.register_buffer("token_suffix", embedding[:, 1 + n_ctx :, :])  # CLS, EOS
-
+        self.register_buffer("token_prefix", embedding[:, :1, :])  # SOS   n_cls,1,512
+        self.register_buffer("token_suffix", embedding[:, 1 + n_ctx :, :])  # CLS, EOS   n_cls,60,512
+ 
         self.n_cls = n_cls
         self.n_ctx = n_ctx
         self.tokenized_prompts = tokenized_prompts  # torch.Tensor
@@ -116,32 +140,34 @@ class PromptLearner(nn.Module):
         self.class_token_position = cfg.TRAINER.COOP.CLASS_TOKEN_POSITION
 
     def forward(self):
-        ctx = self.ctx
-        if ctx.dim() == 2:
-            ctx = ctx.unsqueeze(0).expand(self.n_cls, -1, -1)
+        ctx = self.ctx  #(16,512)
 
-        prefix = self.token_prefix
-        suffix = self.token_suffix
+        if ctx.dim() == 2:
+            ctx = ctx.unsqueeze(0).expand(self.n_cls, -1, -1) #100, 16,512
+
+        prefix = self.token_prefix  #100,1,512
+        suffix = self.token_suffix  #100,60,512
 
         if self.class_token_position == "end":
             prompts = torch.cat(
                 [
                     prefix,  # (n_cls, 1, dim)
                     ctx,     # (n_cls, n_ctx, dim)
-                    suffix,  # (n_cls, *, dim)
+                    suffix,  # (n_cls, *, dim)  #77-16-1=60
                 ],
                 dim=1,
-            )
+            ) # n_cls, 77, 512
 
         elif self.class_token_position == "middle":
             half_n_ctx = self.n_ctx // 2
             prompts = []
+
             for i in range(self.n_cls):
                 name_len = self.name_lens[i]
-                prefix_i = prefix[i : i + 1, :, :]
-                class_i = suffix[i : i + 1, :name_len, :]
-                suffix_i = suffix[i : i + 1, name_len:, :]
-                ctx_i_half1 = ctx[i : i + 1, :half_n_ctx, :]
+                prefix_i = prefix[i : i + 1, :, :] # SOS, 对每个cls都一样
+                class_i = suffix[i : i + 1, :name_len, :] # CLS
+                suffix_i = suffix[i : i + 1, name_len:, :] # EOS, PAD
+                ctx_i_half1 = ctx[i : i + 1, :half_n_ctx, :] # learnable tokens
                 ctx_i_half2 = ctx[i : i + 1, half_n_ctx:, :]
                 prompt = torch.cat(
                     [
@@ -153,8 +179,11 @@ class PromptLearner(nn.Module):
                     ],
                     dim=1,
                 )
+
                 prompts.append(prompt)
-            prompts = torch.cat(prompts, dim=0)
+            prompts = torch.cat(prompts, dim=0) # n_cls, 77, 512
+
+            st()
 
         elif self.class_token_position == "front":
             prompts = []
@@ -197,6 +226,8 @@ class CustomCLIP(nn.Module):
 
         prompts = self.prompt_learner()
         tokenized_prompts = self.tokenized_prompts
+
+        
         text_features = self.text_encoder(prompts, tokenized_prompts)
 
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
